@@ -5,6 +5,10 @@ OBS上でクロマキーを使用せずに透明度を指定した動画を再�
 通常のフルカラー動画に対して、透明度をモノクロで描いた動画を使って透過させます。  
 虹色だろうとなんだろうとクロマキーの制限に悩まされずに綺麗な半透明グラデーションが実現出来ます！
 
+# 使い方
+![説明001](https://user-images.githubusercontent.com/67828511/86533193-44055600-bf0a-11ea-876d-8df3b27eb8c6.png)
+![説明002](https://user-images.githubusercontent.com/67828511/86533207-626b5180-bf0a-11ea-9ee2-079562ff07b4.png)
+![説明003](https://user-images.githubusercontent.com/67828511/86533190-3cde4800-bf0a-11ea-9c89-1cb65cfb7ce8.png)
 
 # Q&A
 ### Q.このツールはOBSのプラグイン拡張ですか？  
