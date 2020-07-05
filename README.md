@@ -1,9 +1,14 @@
 # AlphaMixer
 ![サムネ002](https://user-images.githubusercontent.com/67828511/86532856-f4be2600-bf07-11ea-95bc-2de121816206.png)
-OBS上でクロマキーを使用せずに透明度を指定した動画を再生するツールを作成しました！
+OBS上でクロマキーを使用せずに透明度を指定した動画を再生するツールを作成しました！  
+※OBS:Open Broadcaster Software  
 
 通常のフルカラー動画に対して、透明度をモノクロで描いた動画を使って透過させます。  
 虹色だろうとなんだろうとクロマキーの制限に悩まされずに綺麗な半透明グラデーションが実現出来ます！
+
+# ダウンロード
+下のリンクからどうぞ！  
+https://github.com/into-vision/AlphaMixer/raw/master/bin/AlphaMixer_1_0_0.zip
 
 # 使い方
 ![説明001](https://user-images.githubusercontent.com/67828511/86533193-44055600-bf0a-11ea-876d-8df3b27eb8c6.png)
