@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+	<!--
+		- Alpha Mixer -
+		このツールはOBSでクロマキーを使用せずに動画を透過させるためのものです。 
+		詳細な使用方法などは配布元をご覧いただけると嬉しいです。
+		
+		製作：バイザン
+		twitter：@into_vision
+		GIT：https://github.com/into-vision/AlphaMIxer
+		ライセンス形式：Apache License 2.0
+		　・上記製作者情報を消したり改ざんしないでください。
+		　・再頒布可能です。
+		　　ただし修正箇所があればそれをreadmeや配布ページなどわかり易い場所に明記する必要があります。
+		　　この際、settings.iniのパラメータの変更点は記載する必要はありません。
+		　　settings.iniにスクリプトを追加するような場合は明記する必要があります。
+		　
+		　・個人または社内などパブリックではない環境で使用する分にはご自由に変更できます。　
+		　・製品に対して義務や責任は負いかねます。
+	-->
+<head>
+	<meta charset="UTF-8">
+	<title>Alpha Mixer - ver.1.0.0</title>
+</head>
+
+<body class="main_panel" style="background-color: rgba(255, 255, 255, 0);">
+	<script type="text/javascript" src="settings.ini"></script>
+	<script type="text/javascript">
+		//-----------------------------------------------------------------------
+		// 描画システムの共通デバイス
+		// WebGLをラップします。
+		//-----------------------------------------------------------------------
+		var GraphicsDevice = function (canvas) {
+			this.gl = canvas.getContext('webgl') || canvas.getContext("experimental-webgl");
+			if (!this.gl) {
+				alert("this browser is WebGL not support.");
+			};
+
+			let createShader = (src, type) => {
+				let shader = this.gl.createShader(type);
+				if (!shader) {
+					throw "Shader create failed.";
+				}
+				this.gl.shaderSource(shader, src);
+				this.gl.compileShader(shader);
+
+				let message = this.gl.getShaderInfoLog(shader);
+				if (message && message.length > 0) {
+					if (type === this.gl.VERTEX_SHADER) {
+						alert("Vertex shader compile error:" + message);
+					} else {
+						alert("Fragment shader compile error:" + message);
+					}
+				}
+				return shader;
+			};
+			// 頂点シェーダを作成します
+			this.createVertexShader = (src) => {
+				return createShader(src, this.gl.VERTEX_SHADER);
+			};
+			// フラグメントシェーダ(ピクセルシェーダ)を作成します。
+			this.createFragmentShader = (src) => {
+				return createShader(src, this.gl.FRAGMENT_SHADER);
+			};
+			// シェーダを結合してprogramを作成します。
+			this.createProgram = (vs, fs) => {
+				var program = this.gl.createProgram();
+				this.gl.attachShader(program, vs);
+				this.gl.attachShader(program, fs);
+				this.gl.linkProgram(program);
+				if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+					var log = this.gl.getProgramInfoLog(program);
+					alert("Shader compile error : " + log);
+				}
+				return program;
+			};
+			// 描画ステートにprogramを指定します。
+			this.setProgram = (program) => {
+				this.gl.useProgram(program);
+			};
+			// 描画ステートに頂点バッファを設定します。
+			this.setVertexBuffers = (buffers, declaration) => {
+				if (declaration.elements.length != buffers.length) {
+					alert("バッファーとデカレーションの数が一致しません。");
+				}
+				for (var i = 0; i < buffers.length; ++i) {
+					var elem = declaration.elements[i];
+					this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffers[i].buffer);
+					this.gl.vertexAttribPointer(elem.semantics, elem.elementNum, elem.type, elem.normalize, elem.stride, elem.offset);
+					this.gl.enableVertexAttribArray(elem.semantics);
+				}
+			};
+			// 描画ステートにインデックスバッファを設定します。
+			this.setIndexBuffer = (buffer) => {
+				this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, buffer.buffer);
+			};
+			// 頂点インデックスを使用してポリゴンを描画します。
+			this.drawIndexed = (vertexCount, vertexOffset) => {
+				this.gl.drawElements(this.gl.TRIANGLES, vertexCount, this.gl.UNSIGNED_SHORT, vertexOffset * 2);
+			};
+			// 画面をクリアします。
+			this.clear = (color) => {
+				this.gl.clearColor(color.r / 255.0, color.g / 255.0, color.b / 255.0, color.a / 255.0);
+				this.gl.clearDepth(1.0);
+				this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
+			};
+			// レンダーステートを初期化します。
+			this.applyDefaultRenderState = () => {
+				this.gl.blendFunc(this.gl.ONE, this.gl.ZERO);
+				this.gl.disable(this.gl.BLEND);
+				this.gl.depthFunc(this.gl.ALWAYS);
+				this.gl.disable(this.gl.DEPTH_TEST);
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// ビデオの読み込み及び再生を管理します。
+		//-----------------------------------------------------------------------
+		var VideoPlayer = function (url) {
+			// settings.iniが存在してない場合はデフォルト値が入るようになる。
+			let volume = 1.0;
+			try {
+				volume = min(max(VOLUME, 0.0), 1.0);
+			} catch {
+				volume = 1.0;
+			}
+
+			let loop = false;
+			try {
+				loop = LOOP ? true : false;
+			} catch {
+				loop = false;
+			}
+
+			this.video = document.createElement('video');
+			this.video.autoplay = true;
+			this.video.volume = volume;
+			this.video.muted = volume === 0.0 ? true : false; // 自動再生ポリシーとして、ページ表示と同時に音がなる場合は再生できません。
+			this.video.preload = true;
+			this.video.loop = loop ? true : false;
+
+			Object.defineProperties(this, {
+				isPlayed: { get: () => this.video.currentTime > 0.001 },	// 0フレーム目だとテクスチャの作成に失敗する
+			});
+
+			// ロード開始
+			this.video.src = url;
+
+			// 読み込みが完了したら即座に再生するように
+			let promise = this.video.play();
+			if (promise !== undefined) {
+				promise.then(_ => {
+					// success.
+				}).catch(error => {
+					// 環境によっては動画の自動再生ポリシーによってmuted=trueにしていないと自動再生出来ない場合がある。
+					// その場合はmutedにして再度再生を試みる
+					this.video.muted = true;
+					this.video.play();
+				});
+			}
+		};
+
+		//-----------------------------------------------------------------------
+		// VideoElement特化のテクスチャ
+		//-----------------------------------------------------------------------
+		var VideoTexture = function (graphicsDevice, video) {
+			let gl = graphicsDevice.gl;
+			this.texture = gl.createTexture(gl.TEXTURE_2D);
+			gl.bindTexture(gl.TEXTURE_2D, this.texture);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+			// 現在の動画の表示をキャプチャ
+			this.update = () => {
+				gl.bindTexture(gl.TEXTURE_2D, this.texture);
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// 頂点バッファ
+		//-----------------------------------------------------------------------
+		var VertexBuffer = function (graphicsDevice) {
+			var gl = graphicsDevice.gl;
+			this.buffer = gl.createBuffer();
+			this.setData = (array) => {
+				gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+				gl.bufferData(gl.ARRAY_BUFFER, array, gl.STATIC_DRAW);
+				gl.bindBuffer(gl.ARRAY_BUFFER, null);
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// インデックスバッファ
+		//-----------------------------------------------------------------------
+		var IndexBuffer = function (graphicsDevice) {
+			var gl = graphicsDevice.gl;
+			this.buffer = gl.createBuffer();
+			this.setData = (array) => {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.buffer);
+				gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, array, gl.STATIC_DRAW);
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// パラメータをシェーダーに転送するためのクラス
+		//-----------------------------------------------------------------------
+		var EffectParameter = function (graphics, program, name) {
+			let gl = graphics.gl;
+			let parameter = gl.getUniformLocation(program, name);
+			if (!parameter) throw `${name} is not found.`;
+			this.setTexture = (value, id) => {
+				gl.activeTexture(gl.TEXTURE0 + id);
+				gl.bindTexture(gl.TEXTURE_2D, value.texture);
+				gl.uniform1i(parameter, id);
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// 頂点属性
+		//-----------------------------------------------------------------------
+		var VertexElement = function (semantics, elementType, offset) {
+			this.semantics = semantics;
+			this.elementType = elementType;
+			this.offset = offset;
+		};
+		VertexElement.FLOAT = 1;
+		VertexElement.FLOAT2 = 2;
+		VertexElement.FLOAT3 = 3;
+		VertexElement.FLOAT4 = 4;
+		VertexElement.COLOR = 5;
+		VertexElement.BYTE4 = 5;
+
+		//-----------------------------------------------------------------------
+		// 頂点レイアウト
+		//-----------------------------------------------------------------------
+		var VertexDeclaration = function (graphics, program, vertexElements) {
+			let createElement = (program, vertexElement) => {
+				let gl = graphics.gl;
+				let result = {
+					semantics: gl.getAttribLocation(program, vertexElement.semantics),
+					offset: vertexElement.offset,
+				};
+				switch (vertexElement.elementType) {
+					case VertexElement.FLOAT:	result.elementNum = 1; result.stride = 1 * 4; result.type = gl.FLOAT; result.normalize = false; break;
+					case VertexElement.FLOAT2:	result.elementNum = 2; result.stride = 2 * 4; result.type = gl.FLOAT; result.normalize = false; break;
+					case VertexElement.FLOAT3:	result.elementNum = 3; result.stride = 3 * 4; result.type = gl.FLOAT; result.normalize = false; break;
+					case VertexElement.FLOAT4:	result.elementNum = 4; result.stride = 4 * 4; result.type = gl.FLOAT; result.normalize = false; break;
+					case VertexElement.COLOR:	result.elementNum = 4; result.stride = 4 * 1; result.type = gl.UNSIGNED_BYTE; result.normalize = true; break;
+					case VertexElement.BYTE4:	result.elementNum = 4; result.stride = 4 * 1; result.type = gl.UNSIGNED_BYTE; result.normalize = true; break;
+				}
+				return result;
+			}
+			this.elements = new Array(vertexElements.length);
+			for (var i = 0; i < vertexElements.length; ++i) {
+				this.elements[i] = createElement(program, vertexElements[i]);
+			}
+		};
+
+		//-----------------------------------------------------------------------
+		// ビデオテクスチャをミックスして画面全体に描画するためのクラス
+		//-----------------------------------------------------------------------
+		var Render = function (graphicsDevice) {
+			const vs_code = `
+				attribute vec2 aVertexPosition;
+				varying vec2 vUV;
+				void main(void) {
+					gl_Position = vec4(aVertexPosition, 0.0, 1.0);
+
+					// 横着して座標からUVを構築
+					// 座標は左上が(-1,+1)、右下が(+1,-1)なのでこれを左上が(0,0)、右下が(1,1)になるようにする
+					vUV.x = (aVertexPosition.x + 1.0) * +0.5;
+					vUV.y = (aVertexPosition.y - 1.0) * -0.5;
+				}
+			`;
+
+			const ps_code = `
+				precision mediump float;
+				varying vec2 vUV;
+				uniform sampler2D gTexture;
+
+				void main(void) {
+					vec2 uv0 = vUV * vec2(1.0, 0.5) + vec2(0.0, 0.0);	// 上半分を指すように加工する
+					vec2 uv1 = vUV * vec2(1.0, 0.5) + vec2(0.0, 0.5);	// 下半分を指すように加工する
+					gl_FragColor.rgb = texture2D(gTexture, uv0).rgb;
+					gl_FragColor.a = texture2D(gTexture, uv1).r;
+				}
+			`;
+
+			let vs = graphicsDevice.createVertexShader(vs_code);
+			let ps = graphicsDevice.createFragmentShader(ps_code);
+			let program = graphicsDevice.createProgram(vs, ps);
+
+			// シェーダーとのパラメータの受け渡し先を作成
+			let texRgbParam = new EffectParameter(graphicsDevice, program, 'gTexture');
+
+			// vec2頂点を4つ作成
+			let vertexBuffer = new VertexBuffer(graphicsDevice);
+			vertexBuffer.setData(new Float32Array([-1, +1, +1, +1, +1, -1, -1, -1]));
+
+			// 3頂点のトライアングルを2つ作って四角にする
+			let indexBuffer = new IndexBuffer(graphicsDevice);
+			indexBuffer.setData(new Uint16Array([0, 1, 2, 0, 2, 3]));
+
+			// 頂点デカール構築
+			let decal = new VertexDeclaration(graphicsDevice, program, [
+				new VertexElement('aVertexPosition', VertexElement.FLOAT2, 0),
+			]);
+
+			// シェーダを使用しテクスチャを描画します。
+			this.draw = (dual_texture) => {
+				graphicsDevice.setProgram(program);
+				{
+					texRgbParam.setTexture(dual_texture, 0);
+					graphicsDevice.setVertexBuffers([vertexBuffer], decal);
+					graphicsDevice.setIndexBuffer(indexBuffer);
+				}
+				graphicsDevice.drawIndexed(6, 0);
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// 定期更新フレームを管理します
+		//-----------------------------------------------------------------------
+		var Frame = function () {
+			let canvas = document.getElementById('canvas');
+			canvas.width = document.documentElement.clientWidth;
+			canvas.height = document.documentElement.clientHeight;
+			let graphicsDevice = new GraphicsDevice(canvas);
+
+			let player = new VideoPlayer("media.mp4");
+			let texture = new VideoTexture(graphicsDevice, player.video);
+			let render = new Render(graphicsDevice);
+			let previewTime = new Date().getTime();
+
+			let update = (elapsedTime) => {
+			};
+			let draw = () => {
+				graphicsDevice.applyDefaultRenderState();
+				graphicsDevice.clear({ r: 0, g: 0, b: 0, a: 0 });
+				if (player.isPlayed) {
+					texture.update();
+					render.draw(texture);
+				}
+			};
+			let tick = () => {
+				let currentTime = new Date().getTime();
+				update((currentTime - previewTime) / 1000.0);
+				draw();
+				previewTime = currentTime;
+			};
+			this.run = () => {
+				// 1秒間に60回定期的に呼ばれるようにします。
+				let animationLoop = () => {
+					tick();
+					window.requestAnimationFrame(animationLoop);
+				};
+				animationLoop();
+			};
+		};
+
+		//-----------------------------------------------------------------------
+		// ウィンドウの読み込みが完了したら更新開始
+		//-----------------------------------------------------------------------
+		window.onload = function () {
+			let frame = new Frame();
+			frame.run();
+		};
+	</script>
+
+	<canvas id="canvas" style="position: absolute; top: 0px; left: 0px;"></canvas>
+</body>
+
+</html>
